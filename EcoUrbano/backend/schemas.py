@@ -9,6 +9,8 @@ class OcorrenciaCreate(BaseModel):
     descricao: str = Field(min_length=10)
     categoria: str
     localizacao: str = Field(min_length=3, max_length=255)
+    latitude: float | None = None
+    longitude: float | None = None
 
 class OcorrenciaStatusUpdate(BaseModel):
     status: str
@@ -20,5 +22,7 @@ class OcorrenciaResponse(BaseModel):
     descricao: str
     categoria: str
     localizacao: str
+    latitude: float | None
+    longitude: float | None
     status: str
     criada_em: datetime

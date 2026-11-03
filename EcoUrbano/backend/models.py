@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String, Text, func
+from sqlalchemy import Column, DateTime, Integer, String, Text, Float, func
 from .database import Base
 
 class Ocorrencia(Base):
@@ -8,5 +8,7 @@ class Ocorrencia(Base):
     descricao = Column(Text, nullable=False)
     categoria = Column(String(40), nullable=False, index=True)
     localizacao = Column(String(255), nullable=False)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     status = Column(String(30), nullable=False, default="ABERTA", index=True)
     criada_em = Column(DateTime, server_default=func.now(), nullable=False)

@@ -41,6 +41,7 @@ def listar_ocorrencias(categoria: str | None = Query(None), status: str | None =
 def obter_ocorrencia(ocorrencia_id: int, db: Session = Depends(get_db)):
     item = db.get(Ocorrencia, ocorrencia_id)
     if not item:
+        
         raise HTTPException(404, "Ocorrência não encontrada.")
     return item
 
