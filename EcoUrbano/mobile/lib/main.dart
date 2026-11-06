@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-
 import 'dart:async';
-
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -53,7 +53,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _carregarIndicadores() async {
     try {
       final resposta = await http.get(
-        Uri.parse('http://10.0.2.2:8000/indicadores'),
+        Uri.parse('http://10.44.18.241:8000/indicadores'),
       );
 
       if (resposta.statusCode == 200) {
@@ -271,20 +271,20 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 12),
 
-_actionCard(
-  context,
-  Icons.map_outlined,
-  'Mapa de Ocorrências',
-  'Visualize no mapa os problemas registrados na cidade.',
-  () {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const MapaOcorrenciasPage(),
-      ),
-    );
-  },
-),
+            _actionCard(
+              context,
+              Icons.map_outlined,
+              'Mapa de Ocorrências',
+              'Visualize no mapa os problemas registrados na cidade.',
+              () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const MapaOcorrenciasPage(),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -436,7 +436,7 @@ class _ConsultarOcorrenciasPageState extends State<ConsultarOcorrenciasPage> {
 
     try {
       final resposta = await http.get(
-        Uri.parse('http://10.0.2.2:8000/ocorrencias'),
+        Uri.parse('http://10.44.18.241:8000/ocorrencias'),
       );
 
       if (resposta.statusCode == 200) {
@@ -472,7 +472,7 @@ class _ConsultarOcorrenciasPageState extends State<ConsultarOcorrenciasPage> {
           : null;
 
       final resposta = await http.patch(
-        Uri.parse('http://10.0.2.2:8000/ocorrencias/$id/status'),
+        Uri.parse('http://10.44.18.241:8000/ocorrencias/$id/status'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'status': novoStatus}),
       );
@@ -831,7 +831,7 @@ class _RegistrarOcorrenciaPageState extends State<RegistrarOcorrenciaPage> {
 
     try {
       final resposta = await http.post(
-        Uri.parse('http://10.0.2.2:8000/ocorrencias'),
+        Uri.parse('http://10.44.18.241:8000/ocorrencias'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'titulo': _tituloController.text.trim(),
@@ -1023,16 +1023,24 @@ class _RegistrarOcorrenciaPageState extends State<RegistrarOcorrenciaPage> {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: () async {
-                    final localizacao = await Navigator.push<LatLng>(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const SelecionarLocalizacaoPage(),
-                      ),
-                    );
+                    final resultado =
+                        await Navigator.push<Map<String, dynamic>>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                const SelecionarLocalizacaoPage(),
+                          ),
+                        );
 
-                    if (localizacao != null) {
+                    if (resultado != null) {
                       setState(() {
-                        _localizacaoSelecionada = localizacao;
+                        _localizacaoSelecionada = LatLng(
+                          resultado['latitude'] as double,
+                          resultado['longitude'] as double,
+                        );
+
+                        _localizacaoController.text =
+                            resultado['endereco'] as String;
                       });
                     }
                   },
@@ -1397,10 +1405,134 @@ class SelecionarLocalizacaoPage extends StatefulWidget {
 }
 
 class _SelecionarLocalizacaoPageState extends State<SelecionarLocalizacaoPage> {
-  // Centro inicial do mapa: São Paulo.
   LatLng? _pontoSelecionado;
 
   static const LatLng _centroInicial = LatLng(-23.5505, -46.6333);
+
+  final MapController _mapController = MapController();
+  final Geocoding _geocoding = Geocoding();
+
+  bool _localizando = false;
+  String? _enderecoSelecionado;
+  bool _buscandoEndereco = false;
+
+  Future<void> _localizarUsuario() async {
+    try {
+      setState(() {
+        _localizando = true;
+      });
+
+      bool servicoAtivo = await Geolocator.isLocationServiceEnabled();
+
+      if (!servicoAtivo) {
+        throw Exception('Ative a localização do celular (GPS).');
+      }
+
+      LocationPermission permissao = await Geolocator.checkPermission();
+
+      if (permissao == LocationPermission.denied) {
+        permissao = await Geolocator.requestPermission();
+      }
+
+      if (permissao == LocationPermission.denied) {
+        throw Exception('Permissão de localização negada.');
+      }
+
+      if (permissao == LocationPermission.deniedForever) {
+        throw Exception(
+          'Permissão negada permanentemente. '
+          'Ative a localização nas configurações do aplicativo.',
+        );
+      }
+
+      Position posicao = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      final LatLng localizacao = LatLng(posicao.latitude, posicao.longitude);
+
+      setState(() {
+        _pontoSelecionado = localizacao;
+      });
+
+      _mapController.move(localizacao, 16);
+      await _buscarEndereco(localizacao);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _localizando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _buscarEndereco(LatLng ponto) async {
+    setState(() {
+      _buscandoEndereco = true;
+      _enderecoSelecionado = null;
+    });
+
+    try {
+      final resultados = await _geocoding.placemarkFromCoordinates(
+        ponto.latitude,
+        ponto.longitude,
+      );
+
+      if (resultados.isEmpty) {
+        throw Exception('Endereço não encontrado para este local.');
+      }
+
+      final local = resultados.first;
+
+      final partes = <String>[
+        if (local.street != null && local.street!.isNotEmpty) local.street!,
+        if (local.subLocality != null && local.subLocality!.isNotEmpty)
+          local.subLocality!,
+        if (local.locality != null && local.locality!.isNotEmpty)
+          local.locality!,
+        if (local.administrativeArea != null &&
+            local.administrativeArea!.isNotEmpty)
+          local.administrativeArea!,
+      ];
+
+      final endereco = partes.toSet().join(', ');
+
+      if (endereco.isEmpty) {
+        throw Exception('Não foi possível identificar o endereço.');
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _enderecoSelecionado = endereco;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Não foi possível identificar o endereço: '
+            '${e.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _buscandoEndereco = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1422,42 +1554,66 @@ class _SelecionarLocalizacaoPageState extends State<SelecionarLocalizacaoPage> {
           ),
 
           Expanded(
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: _centroInicial,
-                initialZoom: 13,
-                onTap: (tapPosition, ponto) {
-                  setState(() {
-                    _pontoSelecionado = ponto;
-                  });
-                },
-              ),
+            child: Stack(
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.mobile',
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _centroInicial,
+                    initialZoom: 13,
+                    onTap: (tapPosition, ponto) async {
+                      setState(() {
+                        _pontoSelecionado = ponto;
+                      });
+
+                      await _buscarEndereco(ponto);
+                    },
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.mobile',
+                    ),
+
+                    if (_pontoSelecionado != null)
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: _pontoSelecionado!,
+                            width: 50,
+                            height: 50,
+                            child: const Icon(
+                              Icons.location_pin,
+                              color: Colors.red,
+                              size: 45,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                    const RichAttributionWidget(
+                      attributions: [
+                        TextSourceAttribution(
+                          '© OpenStreetMap contributors © CARTO',
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
 
-                if (_pontoSelecionado != null)
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: _pontoSelecionado!,
-                        width: 50,
-                        height: 50,
-                        child: const Icon(
-                          Icons.location_pin,
-                          color: Colors.red,
-                          size: 45,
-                        ),
-                      ),
-                    ],
+                Positioned(
+                  right: 16,
+                  bottom: 20,
+                  child: FloatingActionButton(
+                    heroTag: 'localizarUsuario',
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF16845B),
+                    onPressed: _localizando ? null : _localizarUsuario,
+                    child: _localizando
+                        ? const CircularProgressIndicator()
+                        : const Icon(Icons.my_location),
                   ),
-
-                const RichAttributionWidget(
-                  attributions: [
-                    TextSourceAttribution('© OpenStreetMap contributors'),
-                  ],
                 ),
               ],
             ),
@@ -1467,12 +1623,28 @@ class _SelecionarLocalizacaoPageState extends State<SelecionarLocalizacaoPage> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                if (_pontoSelecionado != null)
-                  Text(
-                    'Latitude: ${_pontoSelecionado!.latitude.toStringAsFixed(6)}\n'
-                    'Longitude: ${_pontoSelecionado!.longitude.toStringAsFixed(6)}',
-                    textAlign: TextAlign.center,
+                if (_buscandoEndereco)
+                  const CircularProgressIndicator()
+                else if (_enderecoSelecionado != null)
+                  Column(
+                    children: [
+                      const Text(
+                        'LOCALIZAÇÃO IDENTIFICADA',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF16845B),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _enderecoSelecionado!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ],
                   )
+                else if (_pontoSelecionado != null)
+                  const Text('Buscando endereço...')
                 else
                   const Text('Nenhum ponto selecionado.'),
 
@@ -1482,10 +1654,17 @@ class _SelecionarLocalizacaoPageState extends State<SelecionarLocalizacaoPage> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton.icon(
-                    onPressed: _pontoSelecionado == null
+                    onPressed:
+                        _pontoSelecionado == null ||
+                            _buscandoEndereco ||
+                            _enderecoSelecionado == null
                         ? null
                         : () {
-                            Navigator.pop(context, _pontoSelecionado);
+                            Navigator.pop(context, {
+                              'latitude': _pontoSelecionado!.latitude,
+                              'longitude': _pontoSelecionado!.longitude,
+                              'endereco': _enderecoSelecionado!,
+                            });
                           },
                     icon: const Icon(Icons.check),
                     label: const Text('Confirmar localização'),
@@ -1503,12 +1682,12 @@ class _SelecionarLocalizacaoPageState extends State<SelecionarLocalizacaoPage> {
     );
   }
 }
+
 class MapaOcorrenciasPage extends StatefulWidget {
   const MapaOcorrenciasPage({super.key});
 
   @override
-  State<MapaOcorrenciasPage> createState() =>
-      _MapaOcorrenciasPageState();
+  State<MapaOcorrenciasPage> createState() => _MapaOcorrenciasPageState();
 }
 
 class _MapaOcorrenciasPageState extends State<MapaOcorrenciasPage> {
@@ -1527,7 +1706,7 @@ class _MapaOcorrenciasPageState extends State<MapaOcorrenciasPage> {
   Future<void> _carregarOcorrencias() async {
     try {
       final resposta = await http.get(
-        Uri.parse('http://10.0.2.2:8000/ocorrencias'),
+        Uri.parse('http://10.44.18.241:8000/ocorrencias'),
       );
 
       if (resposta.statusCode != 200) {
@@ -1540,8 +1719,7 @@ class _MapaOcorrenciasPageState extends State<MapaOcorrenciasPage> {
 
       setState(() {
         _ocorrencias = dados.where((item) {
-          return item['latitude'] != null &&
-              item['longitude'] != null;
+          return item['latitude'] != null && item['longitude'] != null;
         }).toList();
         _carregando = false;
       });
@@ -1565,10 +1743,7 @@ class _MapaOcorrenciasPageState extends State<MapaOcorrenciasPage> {
           children: [
             Text(
               ocorrencia['titulo'] ?? 'Ocorrência',
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Text('Categoria: ${ocorrencia['categoria']}'),
@@ -1606,52 +1781,49 @@ class _MapaOcorrenciasPageState extends State<MapaOcorrenciasPage> {
       body: _carregando
           ? const Center(child: CircularProgressIndicator())
           : _erro != null
-              ? Center(child: Text(_erro!))
-              : FlutterMap(
-                  options: MapOptions(
-                    initialCenter: _ocorrencias.isNotEmpty
-                        ? LatLng(
-                            (_ocorrencias.first['latitude'] as num).toDouble(),
-                            (_ocorrencias.first['longitude'] as num).toDouble(),
-                          )
-                        : _centroInicial,
-                    initialZoom: 12,
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.mobile',
-                    ),
-                    MarkerLayer(
-                      markers: _ocorrencias.map((ocorrencia) {
-                        return Marker(
-                          point: LatLng(
-                            (ocorrencia['latitude'] as num).toDouble(),
-                            (ocorrencia['longitude'] as num).toDouble(),
-                          ),
-                          width: 50,
-                          height: 50,
-                          child: GestureDetector(
-                            onTap: () => _mostrarDetalhes(ocorrencia),
-                            child: const Icon(
-                              Icons.location_pin,
-                              color: Colors.red,
-                              size: 45,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                    const RichAttributionWidget(
-                      attributions: [
-                        TextSourceAttribution(
-                          '© OpenStreetMap contributors',
+          ? Center(child: Text(_erro!))
+          : FlutterMap(
+              options: MapOptions(
+                initialCenter: _ocorrencias.isNotEmpty
+                    ? LatLng(
+                        (_ocorrencias.first['latitude'] as num).toDouble(),
+                        (_ocorrencias.first['longitude'] as num).toDouble(),
+                      )
+                    : _centroInicial,
+                initialZoom: 12,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.mobile',
+                ),
+                MarkerLayer(
+                  markers: _ocorrencias.map((ocorrencia) {
+                    return Marker(
+                      point: LatLng(
+                        (ocorrencia['latitude'] as num).toDouble(),
+                        (ocorrencia['longitude'] as num).toDouble(),
+                      ),
+                      width: 50,
+                      height: 50,
+                      child: GestureDetector(
+                        onTap: () => _mostrarDetalhes(ocorrencia),
+                        child: const Icon(
+                          Icons.location_pin,
+                          color: Colors.red,
+                          size: 45,
                         ),
-                      ],
-                    ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const RichAttributionWidget(
+                  attributions: [
+                    TextSourceAttribution('© OpenStreetMap contributors'),
                   ],
                 ),
+              ],
+            ),
     );
   }
 }
